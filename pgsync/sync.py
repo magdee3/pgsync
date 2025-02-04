@@ -115,8 +115,7 @@ class Sync(Base, metaclass=Singleton):
         if self.plugins:
             logger.debug(f"plugins available for transformations are {self.plugins}")
             self._plugins: Plugins = Plugins("plugins", self.plugins)
-#         self.query_builder: QueryBuilder = QueryBuilder(verbose=verbose)
-        self.query_builder: QueryBuilder = QueryBuilder(verbose=True)
+        self.query_builder: QueryBuilder = QueryBuilder(verbose=verbose)
         self.count: dict = dict(xlog=0, db=0, redis=0, skip_redis=0, skip_xlog=0, notifications=Counter())
         self._schema_fields: t.Dict[set] = {}
 
