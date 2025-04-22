@@ -1,5 +1,5 @@
 """Sync module."""
-
+from pympler import asizeof
 import asyncio
 import json
 import logging
@@ -9,6 +9,7 @@ import re
 import select
 import sys
 import time
+import statistics
 import typing as t
 from collections import defaultdict
 from threading import current_thread
@@ -119,10 +120,14 @@ class Sync(Base, metaclass=Singleton):
         self.count: dict = dict(xlog=0, db=0, redis=0, skip_redis=0, skip_xlog=0, notifications=Counter())
         self._schema_fields: t.Dict[set] = {}
 
+        skip_only_changes: dict = defaultdict(list)
+        _ = {skip_only_changes[(parts[0], parts[1])].append(parts[2]) for parts in (item.split('.') for item in settings.SKIP_ONLY_CHANGES) if len(parts) == 3}
+        logger.info(f"configured skip fields, SKIP_ONLY_CHANGES={settings.SKIP_ONLY_CHANGES}, skip_only_changes={skip_only_changes}")
+
         if not self._snapshot:
             for node in self.tree.traverse_breadth_first():
                 key: t.Tuple[str, str] = (node.schema, node.table)
-                column_names = {str(column) for column in node.columns if isinstance(column, str)}
+                column_names = {str(column) for column in node.columns if isinstance(column, str) and not (key in skip_only_changes and column in skip_only_changes[key])}
 
                 if node.relationship.foreign_key.child:
                     column_names.union(node.relationship.foreign_key.child)
@@ -1006,7 +1011,7 @@ class Sync(Base, metaclass=Singleton):
 
         node: Node = self.tree.get_node(payload.table, payload.schema)
 
-        logger.debug(f"about to sync changes from table: {node.name}, changes: {payloads}")
+        logger.debug(f"about to sync {len(payloads)} changes, tg_op: {payload.tg_op}, table: {node.name}, changes: {payloads}")
 
         for payload in payloads:
             # this is only required for the non truncate tg_ops
@@ -1020,8 +1025,6 @@ class Sync(Base, metaclass=Singleton):
                         f"{payload.schema}.{payload.table}"
                     )
                     raise
-
-        logger.debug(f"tg_op: {payload.tg_op} table: {node.name}")
 
         filters: dict = {
             node.table: [],
@@ -1149,6 +1152,7 @@ class Sync(Base, metaclass=Singleton):
 
         count: int = self.fetchcount(node._subquery)
 
+#        logger.debug(f"sync sql object size: {asizeof.asizeof(node._subquery)}, started: {count} documents to sync")
         logger.debug(f"sync started: {count} documents to sync")
         log_every: int = 100 if count >= 100 else count
 
@@ -1159,14 +1163,19 @@ class Sync(Base, metaclass=Singleton):
         #     # logger.debug(f"database: read {row}")
         #     pass
         # logger.debug(f"database: done querying for {count} documents")
-
+        transforms1_time: list = []
+        transforms2_time: list = []
+        plugins_time: list = []
         for i, (keys, row, primary_keys) in enumerate(
             self.fetchmany(node._subquery)
         ):
-
+            transforms1_start_time = time.perf_counter()
             row: dict = Transform.transform(row, self.nodes)
+            transforms1_time.append( (time.perf_counter() - transforms1_start_time) * 1_000_000 )
 
-            row[META] = Transform.get_primary_keys(keys)
+            transforms2_start_time = time.perf_counter()
+            row[META] = Transform.get_primary_keys_optimize(keys)
+            transforms2_time.append( (time.perf_counter() - transforms2_start_time) * 1_000_000 )
 
             if self.verbose:
                 print(f"{(i+1)})")
@@ -1189,10 +1198,14 @@ class Sync(Base, metaclass=Singleton):
             ):
                 doc["_type"] = "_doc"
 
+            plugins_start_time = time.perf_counter()
             if self._plugins:
                 doc = next(self._plugins.transform([doc]))
                 if not doc:
+                    logger.debug(f"EMPTY documet is not be stored")
                     continue
+
+            plugins_time.append( (time.perf_counter() - plugins_start_time) * 1_000_000 )
 
             if self.pipeline:
                 doc["pipeline"] = self.pipeline
@@ -1202,7 +1215,10 @@ class Sync(Base, metaclass=Singleton):
 
             if i % log_every == 0 or i == count - 1:
                 batch_number = i // log_every if log_every > 0 else 0
-                logger.debug(f"synced {i+1} documents (batch #{batch_number} x {log_every})")
+                logger.debug(f"synced {i+1} documents (batch #{batch_number} x {log_every}), dur/msec: tr_schema-({min(transforms1_time):.1f}, {max(transforms1_time):.1f}, {statistics.median(transforms1_time):.1f}), tr_pkey-({min(transforms2_time):.1f}, {max(transforms2_time):.1f}, {statistics.median(transforms2_time):.1f}), plugins-({min(plugins_time):.1f}, {max(plugins_time):.1f}, {statistics.median(plugins_time):.1f})")
+                transforms1_time = []
+                transforms2_time = []
+                plugins_time = []
 
             yield doc
 
@@ -1237,7 +1253,7 @@ class Sync(Base, metaclass=Singleton):
     def _poll_redis(self) -> None:
         payloads: list = self.redis.pop()
         if payloads:
-            logger.debug(f"_poll_redis: {payloads}")
+            logger.debug(f"_poll_redis: len: {len(payloads)} payloads: {payloads}")
             self.count["redis"] += len(payloads)
             self.refresh_views()
             self.on_publish(
@@ -1428,6 +1444,8 @@ class Sync(Base, metaclass=Singleton):
         self,
         txmin: t.Optional[int] = None,
         txmax: t.Optional[int] = None,
+        index_name: t.Optional[str] = None,
+        index_root_table_name: t.Optional[str] = None,
     ) -> None:
         """Pull lost transactions from bisness changes table, and apply them."""
 
@@ -1436,7 +1454,7 @@ class Sync(Base, metaclass=Singleton):
         payloads: list = []
 
         for i, (payload) in enumerate(
-            self.fetch_rows_by_chunk(self.make_find_business_changes_query(txmin=txmin, txmax=txmax))
+            self.fetch_rows_by_chunk(self.make_find_business_changes_query(txmin=txmin, txmax=txmax, index_name=index_name, index_root_table_name=index_root_table_name))
         ):
             self.count['xlog'] += 1
             payload = payload._mapping['json_build_object']
@@ -1468,10 +1486,9 @@ class Sync(Base, metaclass=Singleton):
 
         if not self._snapshot:
           if settings.BIFROST_ENABLED:
-             if txmin is not None:
-                 self.apply_business_changes(txmin=txmin, txmax=txmax)
-             else:
-                 self.apply_business_changes(txmin=txmax)
+             txmin = txmax
+             txmax = self.txid_current
+             self.apply_business_changes(txmin=txmin, txmax=txmax, index_name=self.index, index_root_table_name=self.tree.root.table)
           else:
               # now sync up to txmax to capture everything we may have missed
              self.logical_slot_changes(txmin=txmin, txmax=txmax, upto_nchanges=None)

@@ -1,5 +1,6 @@
 # base libraries
-
+memray
+pympler
 boto3
 click
 elasticsearch

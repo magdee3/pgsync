@@ -250,7 +250,7 @@ class SearchClient(object):
             try:
                 logger.debug(f"_scanning search: {search.to_dict()}")
                 for hit in search.scan():
-                    logger.debug(f"_scan hit {hit.meta.id}")
+                    # logger.debug(f"_scan hit {hit.meta.id}")
                     yield hit.meta.id
                 return  # if we complete the scan without error, exit the function
             except ScanError as e:

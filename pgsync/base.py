@@ -900,6 +900,8 @@ class Base(object):
         self,
         txmin: t.Optional[int] = None,
         txmax: t.Optional[int] = None,
+        index_name: t.Optional[str] = None,
+        index_root_table_name: t.Optional[str] = None,
     ) -> sa.sql.Select:
 
         filters: list = []
@@ -909,6 +911,12 @@ class Base(object):
 
         if txmax is not None:
             filters.append(sa.text(f'CAST(CAST(xmin AS TEXT) AS BIGINT) < {txmax}'))
+
+        if index_name is not None:
+            filters.append(sa.text(f'(indices)::jsonb ? \'{index_name}\''))
+
+        if index_root_table_name is not None:
+            filters.append(sa.text(f'table_name != \'{index_root_table_name}\''))
 
         statement: sa.sql.Select = sa.select(
           sa.text("JSON_BUILD_OBJECT('xmin', CAST(CAST(xmin AS TEXT) AS BIGINT), 'new', new_row, 'old', old_row, 'indices', indices, 'tg_op', tg_op, 'table', table_name, 'schema', schema_name, 'changed_fields', changed_fields)")
@@ -967,7 +975,8 @@ class Base(object):
             for partition in result.partitions(chunk_size):
                 for keys, row, *primary_keys in partition:
                     yield keys, row, primary_keys
-            result.close()
+            if not result.closed:
+                result.close()
         self.engine.clear_compiled_cache()
 
     def fetchcount(self, statement: sa.sql.Subquery) -> int:
@@ -1101,7 +1110,7 @@ def _pg_engine(
         password=password,
         port=port,
     )
-    return sa.create_engine(url, echo=echo, connect_args=connect_args)
+    return sa.create_engine(url, echo=echo, connect_args=connect_args, query_cache_size=0)
 
 
 def pg_execute(
