@@ -1202,7 +1202,7 @@ class Sync(Base, metaclass=Singleton):
             if self._plugins:
                 doc = next(self._plugins.transform([doc]))
                 if not doc:
-                    logger.debug(f"EMPTY documet is not be stored")
+                    logger.debug(f"EMPTY document is not be stored")
                     continue
 
             plugins_time.append( (time.perf_counter() - plugins_start_time) * 1_000_000 )
