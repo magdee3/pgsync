@@ -401,11 +401,13 @@ class Sync(Base, metaclass=Singleton):
                          doc: dict,
                          txmin: t.Optional[int] = None,
                          txmax: t.Optional[int] = None,
+                         tg_op: t.Optional[str] = None,
                          ) -> None:
 
         doc_id = doc["_id"]
         transaction_id = txmin or txmax or self._checkpoint
         doc["_transaction_id"] = transaction_id
+        doc["_operation_type"] = tg_op
 
         jdoc = json.dumps(doc).encode('utf-8')
         doc_size = sys.getsizeof(jdoc)
@@ -901,6 +903,13 @@ class Sync(Base, metaclass=Singleton):
                     and not self.search_client.is_opensearch
                 ):
                     doc["_type"] = "_doc"
+                
+                if settings.KAFKA_ENABLED:
+                    doc["_transaction_id"] = payload.xmin
+                    doc["_source"] = {}
+                    doc["_operation_type"] = DELETE
+                    self.publish_to_kafka(doc, payload.xmin, tg_op=DELETE)
+                
                 docs.append(doc)
             if docs:
                 raise_on_exception: t.Optional[bool] = (
@@ -1097,6 +1106,7 @@ class Sync(Base, metaclass=Singleton):
                                         node.table: l2,
                                         node.parent.table: l3,
                                     },
+                                    tg_op=payload.tg_op,
                                 )
                         else:
                             yield from self.sync(
@@ -1104,10 +1114,12 @@ class Sync(Base, metaclass=Singleton):
                                     self.tree.root.table: l1,
                                     node.table: l2,
                                 },
+                                tg_op=payload.tg_op,
                             )
                 else:
                     yield from self.sync(
                         filters={self.tree.root.table: l1},
+                        tg_op=payload.tg_op,
                     )
 
     def sync(
@@ -1116,6 +1128,7 @@ class Sync(Base, metaclass=Singleton):
         txmin: t.Optional[int] = None,
         txmax: t.Optional[int] = None,
         ctid: t.Optional[dict] = None,
+        tg_op: t.Optional[str] = None,
     ) -> t.Generator:
         """
         Synchronizes data from PostgreSQL to Elasticsearch.
@@ -1125,12 +1138,15 @@ class Sync(Base, metaclass=Singleton):
             txmin (Optional[int]): The minimum transaction ID to include in the synchronization.
             txmax (Optional[int]): The maximum transaction ID to include in the synchronization.
             ctid (Optional[dict]): A dictionary of ctid values to include in the synchronization.
+            tg_op (Optional[str]): The operation type (INSERT, UPDATE, DELETE, TRUNCATE).
 
         Yields:
             dict: A dictionary representing a doc to be indexed in Elasticsearch.
         """
         self.query_builder.isouter = True
         self.query_builder.from_obj = None
+
+        tg_op = tg_op or (filters.get("tg_op") if filters else None)
 
         for node in self.tree.traverse_post_order():
             node._subquery = None
@@ -1179,6 +1195,7 @@ class Sync(Base, metaclass=Singleton):
                 "_id": self.get_doc_id(primary_keys, node.table),
                 "_index": self.index,
                 "_source": row,
+                "_operation_type": tg_op,
             }
 
             if self.routing:
@@ -1198,8 +1215,11 @@ class Sync(Base, metaclass=Singleton):
             if self.pipeline:
                 doc["pipeline"] = self.pipeline
 
+            if tg_op:
+                doc["_operation_type"] = tg_op
+
             if settings.KAFKA_ENABLED:
-                self.publish_to_kafka(doc, txmin, txmax)
+                self.publish_to_kafka(doc, txmin, txmax, tg_op)
 
             if i % log_every == 0 or i == count - 1:
                 batch_number = i // log_every if log_every > 0 else 0
