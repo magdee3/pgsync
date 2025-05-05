@@ -401,13 +401,11 @@ class Sync(Base, metaclass=Singleton):
                          doc: dict,
                          txmin: t.Optional[int] = None,
                          txmax: t.Optional[int] = None,
-                         tg_op: t.Optional[str] = None,
                          ) -> None:
 
         doc_id = doc["_id"]
         transaction_id = txmin or txmax or self._checkpoint
         doc["_transaction_id"] = transaction_id
-        doc["_operation_type"] = tg_op
 
         jdoc = json.dumps(doc).encode('utf-8')
         doc_size = sys.getsizeof(jdoc)
@@ -903,13 +901,13 @@ class Sync(Base, metaclass=Singleton):
                     and not self.search_client.is_opensearch
                 ):
                     doc["_type"] = "_doc"
-                
+
                 if settings.KAFKA_ENABLED:
                     doc["_transaction_id"] = payload.xmin
                     doc["_source"] = {}
                     doc["_operation_type"] = DELETE
-                    self.publish_to_kafka(doc, payload.xmin, tg_op=DELETE)
-                
+                    self.publish_to_kafka(doc, payload.xmin)
+
                 docs.append(doc)
             if docs:
                 raise_on_exception: t.Optional[bool] = (
@@ -1219,7 +1217,7 @@ class Sync(Base, metaclass=Singleton):
                 doc["_operation_type"] = tg_op
 
             if settings.KAFKA_ENABLED:
-                self.publish_to_kafka(doc, txmin, txmax, tg_op)
+                self.publish_to_kafka(doc, txmin, txmax)
 
             if i % log_every == 0 or i == count - 1:
                 batch_number = i // log_every if log_every > 0 else 0
