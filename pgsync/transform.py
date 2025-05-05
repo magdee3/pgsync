@@ -2,6 +2,7 @@
 
 import logging
 import typing as t
+from typing import Dict, Any, List, Set
 
 from .constants import (  # noqa
     CONCAT_TRANSFORM,
@@ -241,4 +242,70 @@ class Transform(object):
                         if v not in target4[key][k]:
                             target4[key][k].append(v)
                     target4[key][k] = sorted(target4[key][k])
+        return target4
+
+    @classmethod
+    def get_primary_keys_optimize(cls, primary_keys: Dict) -> Dict:
+        """Get private keys entry from a nested dict with reduced memory usage and proper duplicate handling."""
+
+        def squash_list(values: Dict) -> List[Dict]:
+            """Flatten nested dicts and lists iteratively."""
+            stack = [values]
+            result = []
+
+            while stack:
+                current = stack.pop()
+                if isinstance(current, dict):
+                    if len(current) == 1:
+                        result.append(current)
+                    else:
+                        for key, value in current.items():
+                            stack.append({key: value})
+                elif isinstance(current, list):
+                    for value in reversed(current):
+                        stack.append(value)
+            return result
+
+        # Step 1: Flatten the nested structure
+        flattened = squash_list(primary_keys)
+
+        # Step 2: Process flattened entries
+        target = []
+        for values in flattened:
+            if len(values) > 1:
+                for key, value in values.items():
+                    target.append({key: value})
+            else:
+                target.append(values)
+
+        # Step 3: Merge and organize the results
+        target4: Dict[Any, Dict[Any, List[Any]]] = {}
+        for values in target:
+            for key, value in values.items():
+                if key not in target4:
+                    target4[key] = {}
+                if isinstance(value, dict):
+                    for k, v in value.items():
+                        if k not in target4[key]:
+                            target4[key][k] = set()  # Use a set to avoid duplicates
+                        if isinstance(v, list):
+                            target4[key][k].update(v)  # Add all elements from the list
+                        else:
+                            target4[key][k].add(v)  # Add a single element
+                elif isinstance(value, list):
+                    for v in value:
+                        if isinstance(v, dict):
+                            for _k, _v in v.items():
+                                if _k not in target4[key]:
+                                    target4[key][_k] = set()  # Use a set to avoid duplicates
+                                if isinstance(_v, list):
+                                    target4[key][_k].update(_v)  # Add all elements from the list
+                                else:
+                                    target4[key][_k].add(_v)  # Add a single element
+
+        # Step 4: Convert sets back to sorted lists
+        for key in target4:
+            for sub_key in target4[key]:
+                target4[key][sub_key] = sorted(target4[key][sub_key])
+
         return target4

@@ -43,7 +43,7 @@ class RedisQueue(object):
             pipeline.lrange(self.key, 0, chunk_size - 1)
             pipeline.ltrim(self.key, chunk_size, -1)
             items: t.List = pipeline.execute()
-            logger.debug(f"pop size: {len(items[0])}")
+#            logger.debug(f"pop size: {len(items[0])}")
             return list(map(lambda value: json.loads(value), items[0]))
 
     def push(self, items: t.List) -> None:

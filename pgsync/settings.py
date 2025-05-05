@@ -25,6 +25,7 @@ JOIN_QUERIES = env.bool("JOIN_QUERIES", default=True)
 
 # skip updates for records with empty primary | foreign keys
 SKIP_NULL_KEYS = env.list("SKIP_NULL_KEYS", default=[])
+SKIP_ONLY_CHANGES = env.list("SKIP_ONLY_CHANGES", default=[])
 FORCE_UPDATE = env.bool("FORCE_UPDATE", default=False)
 
 # batch size for LOGICAL_SLOT_CHANGES for minimizing tmp file disk usage
