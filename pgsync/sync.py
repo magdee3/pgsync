@@ -401,11 +401,14 @@ class Sync(Base, metaclass=Singleton):
                          doc: dict,
                          txmin: t.Optional[int] = None,
                          txmax: t.Optional[int] = None,
-                         ) -> None:
+                         **kwargs) -> None:
 
         doc_id = doc["_id"]
         transaction_id = txmin or txmax or self._checkpoint
         doc["_transaction_id"] = transaction_id
+        operation_type = kwargs.get("_operation_type")
+        if operation_type:
+            doc["_operation_type"] = operation_type
 
         jdoc = json.dumps(doc).encode('utf-8')
         doc_size = sys.getsizeof(jdoc)
@@ -903,10 +906,9 @@ class Sync(Base, metaclass=Singleton):
                     doc["_type"] = "_doc"
 
                 if settings.KAFKA_ENABLED:
-                    doc["_transaction_id"] = payload.xmin
                     doc["_source"] = {}
-                    doc["_operation_type"] = DELETE
-                    self.publish_to_kafka(doc, payload.xmin)
+                    self.publish_to_kafka(doc, payload.xmin, _operation_type=DELETE)
+                    del doc["_operation_type"]
 
                 docs.append(doc)
             if docs:
@@ -1193,7 +1195,6 @@ class Sync(Base, metaclass=Singleton):
                 "_id": self.get_doc_id(primary_keys, node.table),
                 "_index": self.index,
                 "_source": row,
-                "_operation_type": tg_op,
             }
 
             if self.routing:
@@ -1213,11 +1214,10 @@ class Sync(Base, metaclass=Singleton):
             if self.pipeline:
                 doc["pipeline"] = self.pipeline
 
-            if tg_op:
-                doc["_operation_type"] = tg_op
-
             if settings.KAFKA_ENABLED:
-                self.publish_to_kafka(doc, txmin, txmax)
+                self.publish_to_kafka(doc, txmin, txmax, _operation_type=tg_op)
+                if "_operation_type" in doc:
+                    del doc["_operation_type"]
 
             if i % log_every == 0 or i == count - 1:
                 batch_number = i // log_every if log_every > 0 else 0
