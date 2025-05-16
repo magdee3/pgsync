@@ -405,7 +405,7 @@ class Sync(Base, metaclass=Singleton):
                          doc: dict,
                          txmin: t.Optional[int] = None,
                          txmax: t.Optional[int] = None,
-                         ) -> None:
+                        ) -> None:
 
         doc_id = doc["_id"]
         transaction_id = txmin or txmax or self._checkpoint
@@ -905,6 +905,10 @@ class Sync(Base, metaclass=Singleton):
                     and not self.search_client.is_opensearch
                 ):
                     doc["_type"] = "_doc"
+
+                if settings.KAFKA_ENABLED:
+                    self.publish_to_kafka(doc, payload.xmin)
+
                 docs.append(doc)
             if docs:
                 raise_on_exception: t.Optional[bool] = (
