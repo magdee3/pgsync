@@ -903,7 +903,6 @@ class Sync(Base, metaclass=Singleton):
                     doc["_type"] = "_doc"
 
                 if settings.KAFKA_ENABLED:
-                    doc["_source"] = {}
                     self.publish_to_kafka(doc, payload.xmin)
 
                 docs.append(doc)
